@@ -1,15 +1,19 @@
+extern crate static_assertions as sa;
+
 use std::{
     intrinsics::copy_nonoverlapping,
     marker::PhantomData,
-    mem::{align_of, forget, size_of},
+    mem::{align_of, forget, needs_drop, size_of},
 };
 
 struct InternalKey {
+    dtor: Option<Box<fn(*const u8)>>,
     offset: KeyIndex,
-    size: usize,
 }
 
-type KeyIndex = usize;
+sa::const_assert_eq!(size_of::<InternalKey>(), 16);
+
+type KeyIndex = u32;
 
 struct HVec {
     raw: Vec<u8>,
@@ -20,6 +24,8 @@ struct Key<T> {
     offset: KeyIndex,
     _phantom: PhantomData<T>,
 }
+
+sa::const_assert_eq!(size_of::<Key<u32>>(), 4);
 
 impl HVec {
     pub fn new() -> Self {
@@ -62,13 +68,23 @@ impl HVec {
 
         let key = Key {
             // the value is stored just after allignment padding
-            offset: old_len + alignment_padding,
+            offset: (old_len + alignment_padding) as u32,
             _phantom: PhantomData,
         };
 
+        let dtor = if needs_drop::<V>() {
+            // let dropable: &dyn Drop = transmute(&value);
+            let f: fn(*const u8) = |x: *const u8| {
+                let ptr: *mut V = x as *mut V;
+                unsafe { ptr.drop_in_place() }
+            };
+            Some(Box::new(f))
+        } else {
+            None
+        };
         self.keys_given_out.push(InternalKey {
             offset: key.offset,
-            size: size_of::<V>(),
+            dtor: dtor,
         });
 
         // make sure that the value is not dropped
@@ -78,17 +94,19 @@ impl HVec {
     }
 
     pub fn get<'a, V>(&'a self, key: Key<V>) -> &'a V {
-        let ptr: *const V = unsafe { self.raw.as_ptr().add(key.offset) as *const V };
+        let ptr: *const V = unsafe { self.raw.as_ptr().add(key.offset as usize) as *const V };
         unsafe { ptr.as_ref().unwrap() }
     }
 }
 
 impl Drop for HVec {
     fn drop(&mut self) {
-        for key in self.keys_given_out {
+        for key in self.keys_given_out.iter() {
             // Access the items, and drop
-            let ptr: *const V = unsafe { self.raw.as_ptr().add(key.offset) as *const V };
-            let v = unsafe { ptr.read() };
+            let ptr: *const u8 = unsafe { self.raw.as_ptr().add(key.offset as usize) };
+            if let Some(dtor) = &key.dtor {
+                dtor(ptr)
+            }
         }
     }
 }
@@ -98,13 +116,17 @@ mod tests {
     use crate::HVec;
 
     #[test]
-    fn it_works() {
+    fn simple_copy_type() {
         let mut hvec = HVec::new();
         let v = 1u8;
         let k = hvec.push(v);
         let ret = hvec.get(k);
         assert_eq!(v, *ret);
+    }
 
+    #[test]
+    fn simple_non_copy_type() {
+        let mut hvec = HVec::new();
         let v2 = vec![1];
         let v2_same = v2.clone();
         let k2 = hvec.push(v2);
