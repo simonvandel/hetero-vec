@@ -15,12 +15,12 @@ sa::const_assert_eq!(size_of::<InternalKey>(), 16);
 
 type KeyIndex = u32;
 
-struct HVec {
+pub struct HVec {
     raw: Vec<u8>,
     keys_given_out: Vec<InternalKey>,
 }
 
-struct Key<T> {
+pub struct Key<T> {
     offset: KeyIndex,
     _phantom: PhantomData<T>,
 }
