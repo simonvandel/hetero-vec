@@ -102,7 +102,6 @@ impl HVec {
 impl Drop for HVec {
     fn drop(&mut self) {
         for key in self.keys_given_out.iter() {
-            // Access the items, and drop
             let ptr: *const u8 = unsafe { self.raw.as_ptr().add(key.offset as usize) };
             if let Some(dtor) = &key.dtor {
                 dtor(ptr)
